@@ -1,0 +1,168 @@
+import { Interface } from '@ethersproject/abi';
+import { DeepReadonly } from 'ts-essentials';
+import { Log, Logger, Token } from '../../types';
+import { catchParseLogError } from '../../utils';
+import { StatefulEventSubscriber } from '../../stateful-event-subscriber';
+import { IDexHelper } from '../../dex-helper/idex-helper';
+import { MultiCallParams } from '../../lib/multi-wrapper';
+import { uint256ToBigInt } from '../../lib/decoders';
+import { OSwapPool, OSwapPoolState } from './types';
+import OSwapABI from '../../abi/oswap/oswap.abi.json';
+import ERC20ABI from '../../abi/ERC20.abi.json'
+
+export class OSwapEventPool extends StatefulEventSubscriber<OSwapPoolState> {
+  handlers: {
+    [event: string]: (
+      event: any,
+      state: DeepReadonly<OSwapPoolState>,
+      log: Readonly<Log>,
+    ) => DeepReadonly<OSwapPoolState> | null;
+  } = {};
+
+  logDecoder: (log: Log) => any;
+
+  addressesSubscribed: string[];
+
+  constructor(
+    readonly parentName: string,
+    readonly pool: OSwapPool,
+    protected network: number,
+    protected dexHelper: IDexHelper,
+    logger: Logger,
+    protected iOSwap = new Interface(OSwapABI),
+  ) {
+    super(parentName, pool.id, dexHelper, logger);
+
+    this.logDecoder = (log: Log) => this.iOSwap.parseLog(log);
+    this.addressesSubscribed = [ pool.address, pool.token0, pool.token1 ];
+    this.handlers['TraderateChanged'] = this.handleTraderateChanged.bind(this);
+    this.handlers['Transfer'] = this.handleTransfer.bind(this);
+  }
+
+  /**
+   * The function is called every time any of the subscribed
+   * addresses release log. The function accepts the current
+   * state, updates the state according to the log, and returns
+   * the updated state.
+   * @param state - Current state of event subscriber
+   * @param log - Log released by one of the subscribed addresses
+   * @returns Updates state of the event subscriber after the log
+   */
+  protected processLog(
+    state: DeepReadonly<OSwapPoolState>,
+    log: Readonly<Log>,
+  ): DeepReadonly<OSwapPoolState> | null {
+    try {
+      const event = this.logDecoder(log);
+      if (event.name in this.handlers) {
+        return this.handlers[event.name](event, state, log);
+      }
+    } catch (e) {
+      catchParseLogError(e, this.logger);
+    }
+
+    return null;
+  }
+
+  /**
+   * The function generates state using on-chain calls. This
+   * function is called to regenerate state if the event based
+   * system fails to fetch events and the local state is no
+   * more correct.
+   * @param blockNumber - Blocknumber for which the state should
+   * should be generated
+   * @returns state of the event subscriber at blocknumber
+   */
+  async generateState(blockNumber: number): Promise<DeepReadonly<OSwapPoolState>> {
+    const iERC20 = new Interface(ERC20ABI);
+    const callData: MultiCallParams<bigint>[] = [
+      {
+        target: this.pool.token0,
+        callData: iERC20.encodeFunctionData('balanceOf', [ this.pool.address ]),
+        decodeFunction: uint256ToBigInt,
+      },
+      {
+        target: this.pool.token1,
+        callData: iERC20.encodeFunctionData('balanceOf', [ this.pool.address ]),
+        decodeFunction: uint256ToBigInt,
+      },
+      {
+        target: this.pool.address,
+        callData: this.iOSwap.encodeFunctionData('traderate0', [ this.pool.address ]),
+        decodeFunction: uint256ToBigInt,
+      },
+      {
+        target: this.pool.address,
+        callData: this.iOSwap.encodeFunctionData('traderate1', [ this.pool.address ]),
+        decodeFunction: uint256ToBigInt,
+      },
+    ];
+
+    const results = await this.dexHelper.multiWrapper.tryAggregate<bigint>(
+        false,
+        callData,
+        blockNumber,
+        this.dexHelper.multiWrapper.defaultBatchSize,
+        false,
+      );
+
+    return {
+      balance0: results[0].returnData,
+      balance1: results[0].returnData,
+      traderate0: results[0].returnData,
+      traderate1: results[0].returnData,
+    }
+  }
+
+  /**
+   * Handles a trade rate change on the pool.
+   */
+  handleTraderateChanged(
+    event: any,
+    state: DeepReadonly<OSwapPoolState>,
+    log: Readonly<Log>,
+  ): DeepReadonly<OSwapPoolState> | null {
+    return {
+      ...state,
+      traderate0: event.args.traderate0.toBigInt(),
+      traderate1: event.args.traderate1.toBigInt(),
+    }
+  }
+
+  /**
+   * Process the transfer events for tokens in/out of the pool
+   * to keep the state's token balances sup to date.
+   */
+  handleTransfer(
+    event: any,
+    state: DeepReadonly<OSwapPoolState>,
+    log: Readonly<Log>,
+  ): DeepReadonly<OSwapPoolState> | null {
+    let balance0: bigint = state.balance0;
+    let balance1: bigint = state.balance1;
+
+    const tokenAddress = log.address.toLowerCase()
+    const fromAddress = event.args.src.toLowerCase();
+    const toAddress = event.args.dst.toLowerCase();
+    const amount = event.args.wad.toBigInt();
+
+    if (fromAddress == this.pool.address) {
+      if (tokenAddress === this.pool.token0) {
+        balance0 -= amount;
+      } else if (tokenAddress === this.pool.token1) {
+        balance1 -= amount;
+      }
+    } else if (toAddress == this.pool.address) {
+      if (tokenAddress === this.pool.token0) {
+        balance0 += amount;
+      } else if (tokenAddress === this.pool.token1) {
+        balance1 += amount;
+      }
+    }
+    return {
+      ...state,
+      balance0,
+      balance1
+    }
+  }
+}
