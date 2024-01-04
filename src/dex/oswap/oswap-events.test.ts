@@ -2,80 +2,60 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+import { OSwapConfig } from './config';
 import { OSwapEventPool } from './oswap-pool';
 import { Network } from '../../constants';
 import { Address } from '../../types';
 import { DummyDexHelper } from '../../dex-helper/index';
 import { testEventSubscriber } from '../../../tests/utils-events';
-import { OSwapPoolState } from './types';
-
-/*
-  README
-  ======
-
-  This test script adds unit tests for Oswap event based
-  system. This is done by fetching the state on-chain before the
-  event block, manually pushing the block logs to the event-subscriber,
-  comparing the local state with on-chain state.
-
-  Most of the logic for testing is abstracted by `testEventSubscriber`.
-  You need to do two things to make the tests work:
-
-  1. Fetch the block numbers where certain events were released. You
-  can modify the `./scripts/fetch-event-blocknumber.ts` to get the
-  block numbers for different events. Make sure to get sufficient
-  number of blockNumbers to cover all possible cases for the event
-  mutations.
-
-  2. Complete the implementation for fetchPoolState function. The
-  function should fetch the on-chain state of the event subscriber
-  using just the blocknumber.
-
-  The template tests only include the test for a single event
-  subscriber. There can be cases where multiple event subscribers
-  exist for a single DEX. In such cases additional tests should be
-  added.
-
-  You can run this individual test script by running:
-  `npx jest src/dex/<dex-name>/<dex-name>-events.test.ts`
-
-  (This comment should be removed from the final implementation)
-*/
+import { OSwapPool, OSwapPoolState } from './types';
 
 jest.setTimeout(50 * 1000);
-
-async function fetchPoolState(
-  oswapPools: OSwapEventPool,
-  blockNumber: number,
-  poolAddress: string,
-): Promise<OSwapPoolState> {
-  // TODO: complete me!
-  return {};
-}
 
 // eventName -> blockNumbers
 type EventMappings = Record<string, number[]>;
 
+// Helper function. Returns the absolute value of the difference between 2 bigints.
+function absdelta(a: bigint, b: bigint) {
+  const delta = a - b;
+  return delta < 0 ? -delta : delta;
+}
+
+function stateCompare(state1: OSwapPoolState, state2: OSwapPoolState) {
+  const ROUNDING_ERROR = 2;
+
+  expect(state1.traderate0).toEqual(state2.traderate0);
+  expect(state1.traderate1).toEqual(state2.traderate1);
+  // Some ERC20 tokens have rounding error which can lead to the balance computed from Transfer event valuee
+  // to deviate by a couple gwei vs the on-chain balance.
+  // For example stETH: https://docs.lido.fi/guides/lido-tokens-integration-guide/#1-2-wei-corner-case
+  expect(absdelta(state1.balance0, state2.balance0)).toBeLessThan(
+    ROUNDING_ERROR,
+  );
+  expect(absdelta(state1.balance1, state2.balance1)).toBeLessThan(
+    ROUNDING_ERROR,
+  );
+}
+
 describe('Oswap EventPool Mainnet', function () {
-  const dexKey = 'Oswap';
+  const dexKey = 'OSwap';
   const network = Network.MAINNET;
   const dexHelper = new DummyDexHelper(network);
   const logger = dexHelper.getLogger(dexKey);
-  let oswapPool: OSwapEventPool;
+  const pool: OSwapPool = OSwapConfig[dexKey][network].pools[0];
+
+  let eventPool: OSwapEventPool;
 
   // poolAddress -> EventMappings
   const eventsToTest: Record<Address, EventMappings> = {
-    // TODO: complete me!
+    '0x85b78aca6deae198fbf201c82daf6ca21942acc6': {
+      TraderateChanged: [18917344],
+      Transfer: [18922097, 18924756],
+    },
   };
 
   beforeEach(async () => {
-    oswapPool = new OSwapEventPool(
-      dexKey,
-      network,
-      dexHelper,
-      logger,
-      /* TODO: Put here additional constructor arguments if needed */
-    );
+    eventPool = new OSwapEventPool(dexKey, pool, network, dexHelper, logger);
   });
 
   Object.entries(eventsToTest).forEach(
@@ -87,17 +67,15 @@ describe('Oswap EventPool Mainnet', function () {
               blockNumbers.forEach((blockNumber: number) => {
                 it(`State after ${blockNumber}`, async function () {
                   await testEventSubscriber(
-                    oswapPool,
-                    oswapPool.addressesSubscribed,
+                    eventPool,
+                    eventPool.addressesSubscribed,
                     (_blockNumber: number) =>
-                      fetchPoolState(
-                        oswapPool,
-                        _blockNumber,
-                        poolAddress,
-                      ),
+                      eventPool.generateState(_blockNumber),
                     blockNumber,
                     `${dexKey}_${poolAddress}`,
                     dexHelper.provider,
+                    (state1: OSwapPoolState, state2: OSwapPoolState) =>
+                      stateCompare(state1, state2),
                   );
                 });
               });

@@ -8,7 +8,7 @@ import { MultiCallParams } from '../../lib/multi-wrapper';
 import { uint256ToBigInt } from '../../lib/decoders';
 import { OSwapPool, OSwapPoolState } from './types';
 import OSwapABI from '../../abi/oswap/oswap.abi.json';
-import ERC20ABI from '../../abi/ERC20.abi.json'
+import ERC20ABI from '../../abi/ERC20.abi.json';
 
 export class OSwapEventPool extends StatefulEventSubscriber<OSwapPoolState> {
   handlers: {
@@ -30,13 +30,22 @@ export class OSwapEventPool extends StatefulEventSubscriber<OSwapPoolState> {
     protected dexHelper: IDexHelper,
     logger: Logger,
     protected iOSwap = new Interface(OSwapABI),
+    protected iERC20 = new Interface(ERC20ABI),
   ) {
     super(parentName, pool.id, dexHelper, logger);
 
-    this.logDecoder = (log: Log) => this.iOSwap.parseLog(log);
-    this.addressesSubscribed = [ pool.address, pool.token0, pool.token1 ];
+    this.logDecoder = (log: Log) => this.parseLog(log);
+
+    this.addressesSubscribed = [pool.address, pool.token0, pool.token1];
     this.handlers['TraderateChanged'] = this.handleTraderateChanged.bind(this);
     this.handlers['Transfer'] = this.handleTransfer.bind(this);
+  }
+
+  protected parseLog(log: Log) {
+    if (log.address.toLowerCase() === this.pool.address) {
+      return this.iOSwap.parseLog(log);
+    }
+    return this.iERC20.parseLog(log);
   }
 
   /**
@@ -73,45 +82,47 @@ export class OSwapEventPool extends StatefulEventSubscriber<OSwapPoolState> {
    * should be generated
    * @returns state of the event subscriber at blocknumber
    */
-  async generateState(blockNumber: number): Promise<DeepReadonly<OSwapPoolState>> {
+  async generateState(
+    blockNumber: number,
+  ): Promise<DeepReadonly<OSwapPoolState>> {
     const iERC20 = new Interface(ERC20ABI);
     const callData: MultiCallParams<bigint>[] = [
       {
         target: this.pool.token0,
-        callData: iERC20.encodeFunctionData('balanceOf', [ this.pool.address ]),
+        callData: iERC20.encodeFunctionData('balanceOf', [this.pool.address]),
         decodeFunction: uint256ToBigInt,
       },
       {
         target: this.pool.token1,
-        callData: iERC20.encodeFunctionData('balanceOf', [ this.pool.address ]),
+        callData: iERC20.encodeFunctionData('balanceOf', [this.pool.address]),
         decodeFunction: uint256ToBigInt,
       },
       {
         target: this.pool.address,
-        callData: this.iOSwap.encodeFunctionData('traderate0', [ this.pool.address ]),
+        callData: this.iOSwap.encodeFunctionData('traderate0', []),
         decodeFunction: uint256ToBigInt,
       },
       {
         target: this.pool.address,
-        callData: this.iOSwap.encodeFunctionData('traderate1', [ this.pool.address ]),
+        callData: this.iOSwap.encodeFunctionData('traderate1', []),
         decodeFunction: uint256ToBigInt,
       },
     ];
 
     const results = await this.dexHelper.multiWrapper.tryAggregate<bigint>(
-        false,
-        callData,
-        blockNumber,
-        this.dexHelper.multiWrapper.defaultBatchSize,
-        false,
-      );
+      false,
+      callData,
+      blockNumber,
+      this.dexHelper.multiWrapper.defaultBatchSize,
+      false,
+    );
 
     return {
       balance0: results[0].returnData,
-      balance1: results[0].returnData,
-      traderate0: results[0].returnData,
-      traderate1: results[0].returnData,
-    }
+      balance1: results[1].returnData,
+      traderate0: results[2].returnData,
+      traderate1: results[3].returnData,
+    };
   }
 
   /**
@@ -126,7 +137,7 @@ export class OSwapEventPool extends StatefulEventSubscriber<OSwapPoolState> {
       ...state,
       traderate0: event.args.traderate0.toBigInt(),
       traderate1: event.args.traderate1.toBigInt(),
-    }
+    };
   }
 
   /**
@@ -141,10 +152,10 @@ export class OSwapEventPool extends StatefulEventSubscriber<OSwapPoolState> {
     let balance0: bigint = state.balance0;
     let balance1: bigint = state.balance1;
 
-    const tokenAddress = log.address.toLowerCase()
-    const fromAddress = event.args.src.toLowerCase();
-    const toAddress = event.args.dst.toLowerCase();
-    const amount = event.args.wad.toBigInt();
+    const tokenAddress = log.address.toLowerCase();
+    const fromAddress = event.args.from.toLowerCase();
+    const toAddress = event.args.to.toLowerCase();
+    const amount = event.args.value.toBigInt();
 
     if (fromAddress == this.pool.address) {
       if (tokenAddress === this.pool.token0) {
@@ -159,10 +170,11 @@ export class OSwapEventPool extends StatefulEventSubscriber<OSwapPoolState> {
         balance1 += amount;
       }
     }
+
     return {
       ...state,
       balance0,
-      balance1
-    }
+      balance1,
+    };
   }
 }
