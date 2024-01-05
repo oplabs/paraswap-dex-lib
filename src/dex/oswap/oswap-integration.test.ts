@@ -2,96 +2,73 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-import { Interface, Result } from '@ethersproject/abi';
 import { DummyDexHelper } from '../../dex-helper/index';
 import { Network, SwapSide } from '../../constants';
 import { BI_POWS } from '../../bigint-constants';
-import { Oswap } from './oswap';
+import { MultiCallParams } from '../../lib/multi-wrapper';
+import { uint256ToBigInt } from '../../lib/decoders';
+import { getBigIntPow } from '../../utils';
 import {
   checkPoolPrices,
   checkPoolsLiquidity,
   checkConstantPoolPrices,
 } from '../../../tests/utils';
 import { Tokens } from '../../../tests/constants-e2e';
+import { OSwap } from './OSwap';
+import { OSwapPool } from './types';
 
-/*
-  README
-  ======
+async function getOnchainTraderates(
+  oswap: OSwap,
+  pool: OSwapPool,
+  blockNumber: number,
+): Promise<{ traderate0: bigint; traderate1: bigint }> {
+  const callData: MultiCallParams<bigint>[] = [
+    {
+      target: pool.address,
+      callData: oswap.iOSwap.encodeFunctionData('traderate0', []),
+      decodeFunction: uint256ToBigInt,
+    },
+    {
+      target: pool.address,
+      callData: oswap.iOSwap.encodeFunctionData('traderate1', []),
+      decodeFunction: uint256ToBigInt,
+    },
+  ];
 
-  This test script adds tests for Oswap general integration
-  with the DEX interface. The test cases below are example tests.
-  It is recommended to add tests which cover Oswap specific
-  logic.
+  const results = await oswap.dexHelper.multiWrapper.aggregate<bigint>(
+    callData,
+    blockNumber,
+    oswap.dexHelper.multiWrapper.defaultBatchSize,
+  );
 
-  You can run this individual test script by running:
-  `npx jest src/dex/<dex-name>/<dex-name>-integration.test.ts`
-
-  (This comment should be removed from the final implementation)
-*/
-
-function getReaderCalldata(
-  exchangeAddress: string,
-  readerIface: Interface,
-  amounts: bigint[],
-  funcName: string,
-  // TODO: Put here additional arguments you need
-) {
-  return amounts.map(amount => ({
-    target: exchangeAddress,
-    callData: readerIface.encodeFunctionData(funcName, [
-      // TODO: Put here additional arguments to encode them
-      amount,
-    ]),
-  }));
+  return { traderate0: results[0], traderate1: results[1] };
 }
 
-function decodeReaderResult(
-  results: Result,
-  readerIface: Interface,
-  funcName: string,
-) {
-  // TODO: Adapt this function for your needs
-  return results.map(result => {
-    const parsed = readerIface.decodeFunctionResult(funcName, result);
-    return BigInt(parsed[0]._hex);
-  });
-}
-
+// Check prices passed as arguments against prices calculated from data fetched on-chain.
 async function checkOnChainPricing(
-  oswap: Oswap,
-  funcName: string,
+  oswap: OSwap,
+  pool: OSwapPool,
   blockNumber: number,
   prices: bigint[],
+  side: SwapSide,
   amounts: bigint[],
 ) {
-  const exchangeAddress = ''; // TODO: Put here the real exchange address
-
-  // TODO: Replace dummy interface with the real one
-  // Normally you can get it from oswap.Iface or from eventPool.
-  // It depends on your implementation
-  const readerIface = new Interface('');
-
-  const readerCallData = getReaderCalldata(
-    exchangeAddress,
-    readerIface,
-    amounts.slice(1),
-    funcName,
-  );
-  const readerResult = (
-    await oswap.dexHelper.multiContract.methods
-      .aggregate(readerCallData)
-      .call({}, blockNumber)
-  ).returnData;
-
-  const expectedPrices = [0n].concat(
-    decodeReaderResult(readerResult, readerIface, funcName),
-  );
+  // Get the onchain trade rates from the pool and calculate the prices.
+  const data = await getOnchainTraderates(oswap, pool, blockNumber);
+  let expectedPrices: bigint[] = [];
+  for (const amount of amounts) {
+    if ((side = SwapSide.SELL)) {
+      expectedPrices.push((amount * data.traderate0) / getBigIntPow(36));
+    } else {
+      expectedPrices.push((amount * data.traderate1) / getBigIntPow(36));
+    }
+  }
 
   expect(prices).toEqual(expectedPrices);
 }
 
 async function testPricingOnNetwork(
-  oswap: Oswap,
+  oswap: OSwap,
   network: Network,
   dexKey: string,
   blockNumber: number,
@@ -99,30 +76,29 @@ async function testPricingOnNetwork(
   destTokenSymbol: string,
   side: SwapSide,
   amounts: bigint[],
-  funcNameToCheck: string,
 ) {
   const networkTokens = Tokens[network];
 
-  const pools = await oswap.getPoolIdentifiers(
+  const poolIds = await oswap.getPoolIdentifiers(
     networkTokens[srcTokenSymbol],
     networkTokens[destTokenSymbol],
     side,
     blockNumber,
   );
   console.log(
-    `${srcTokenSymbol} <> ${destTokenSymbol} Pool Identifiers: `,
-    pools,
+    `${srcTokenSymbol} <> ${destTokenSymbol} Pool Identifiers: ${poolIds}`,
   );
 
-  expect(pools.length).toBeGreaterThan(0);
+  expect(poolIds.length).toBeGreaterThan(0);
 
+  // Get calculated prices based on the stored state.
   const poolPrices = await oswap.getPricesVolume(
     networkTokens[srcTokenSymbol],
     networkTokens[destTokenSymbol],
     amounts,
     side,
     blockNumber,
-    pools,
+    poolIds,
   );
   console.log(
     `${srcTokenSymbol} <> ${destTokenSymbol} Pool Prices: `,
@@ -136,20 +112,23 @@ async function testPricingOnNetwork(
     checkPoolPrices(poolPrices!, amounts, side, dexKey);
   }
 
-  // Check if onchain pricing equals to calculated ones
+  // Check that the prices calculated from onchain data match with the ones calculated from the stored state.
+  const pool = oswap.getPoolById(poolIds[0]);
+  expect(pool).not.toBeNull();
   await checkOnChainPricing(
     oswap,
-    funcNameToCheck,
+    pool as OSwapPool,
     blockNumber,
     poolPrices![0].prices,
+    side,
     amounts,
   );
 }
 
-describe('Oswap', function () {
-  const dexKey = 'Oswap';
+describe('OSwap', function () {
+  const dexKey = 'OSwap';
   let blockNumber: number;
-  let oswap: Oswap;
+  let oswap: OSwap;
 
   describe('Mainnet', () => {
     const network = Network.MAINNET;
@@ -157,10 +136,8 @@ describe('Oswap', function () {
 
     const tokens = Tokens[network];
 
-    // TODO: Put here token Symbol to check against
-    // Don't forget to update relevant tokens in constant-e2e.ts
-    const srcTokenSymbol = 'srcTokenSymbol';
-    const destTokenSymbol = 'destTokenSymbol';
+    const srcTokenSymbol = 'WETH';
+    const destTokenSymbol = 'STETH';
 
     const amountsForSell = [
       0n,
@@ -190,12 +167,49 @@ describe('Oswap', function () {
       10n * BI_POWS[tokens[destTokenSymbol].decimals],
     ];
 
-    beforeAll(async () => {
+    // Return a blockNumber to use for the tests.
+    // Check the pool has enough liquidity to run the tests at the current blockNumber.
+    // If not, fallback to a known blockNumber in the past with high enough liquidity.
+    async function getBlockNumberForTesting(oswap: OSwap): Promise<number> {
+      const DEFAULT_BLOCK_NUMBER = 18888241;
+
       blockNumber = await dexHelper.web3Provider.eth.getBlockNumber();
-      oswap = new Oswap(network, dexKey, dexHelper);
-      if (oswap.initializePricing) {
-        await oswap.initializePricing(blockNumber);
+      const srcToken = Tokens[network][srcTokenSymbol];
+      const destToken = Tokens[network][destTokenSymbol];
+
+      // Get the pool and its state for the given test pair.
+      const pool = oswap.getPoolByTokenPair(srcToken, destToken);
+      if (!pool)
+        throw new Error(
+          `No pool found for pair ${srcTokenSymbol}-${destTokenSymbol}`,
+        );
+
+      const eventPool = oswap.eventPools[pool.id];
+      const state = await eventPool.getStateOrGenerate(blockNumber);
+
+      // Sum up all the amounts from the test scenarios.
+      const sellTotalAmount = amountsForSell.reduce(
+        (a: bigint, b: bigint) => a + b,
+        BigInt(0),
+      );
+      const buyTotalAmount = amountsForBuy.reduce(
+        (a: bigint, b: bigint) => a + b,
+        BigInt(0),
+      );
+
+      if (
+        !oswap.checkLiquidity(pool, state, srcToken, sellTotalAmount) ||
+        !oswap.checkLiquidity(pool, state, destToken, buyTotalAmount)
+      ) {
+        return DEFAULT_BLOCK_NUMBER;
       }
+      return blockNumber;
+    }
+
+    beforeAll(async () => {
+      oswap = new OSwap(network, dexKey, dexHelper);
+
+      blockNumber = await getBlockNumberForTesting(oswap);
     });
 
     it('getPoolIdentifiers and getPricesVolume SELL', async function () {
@@ -208,7 +222,6 @@ describe('Oswap', function () {
         destTokenSymbol,
         SwapSide.SELL,
         amountsForSell,
-        '', // TODO: Put here proper function name to check pricing
       );
     });
 
@@ -222,24 +235,23 @@ describe('Oswap', function () {
         destTokenSymbol,
         SwapSide.BUY,
         amountsForBuy,
-        '', // TODO: Put here proper function name to check pricing
       );
     });
 
     it('getTopPoolsForToken', async function () {
       // We have to check without calling initializePricing, because
       // pool-tracker is not calling that function
-      const newOswap = new Oswap(network, dexKey, dexHelper);
-      if (newOswap.updatePoolState) {
-        await newOswap.updatePoolState();
+      const newOSwap = new OSwap(network, dexKey, dexHelper);
+      if (newOSwap.updatePoolState) {
+        await newOSwap.updatePoolState();
       }
-      const poolLiquidity = await newOswap.getTopPoolsForToken(
+
+      const poolLiquidity = await newOSwap.getTopPoolsForToken(
         tokens[srcTokenSymbol].address,
         10,
       );
-      console.log(`${srcTokenSymbol} Top Pools:`, poolLiquidity);
 
-      if (!newOswap.hasConstantPriceLargeAmounts) {
+      if (!newOSwap.hasConstantPriceLargeAmounts) {
         checkPoolsLiquidity(
           poolLiquidity,
           Tokens[network][srcTokenSymbol].address,

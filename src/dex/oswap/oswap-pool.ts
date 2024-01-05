@@ -109,20 +109,27 @@ export class OSwapEventPool extends StatefulEventSubscriber<OSwapPoolState> {
       },
     ];
 
-    const results = await this.dexHelper.multiWrapper.tryAggregate<bigint>(
-      false,
+    const results = await this.dexHelper.multiWrapper.aggregate<bigint>(
       callData,
       blockNumber,
       this.dexHelper.multiWrapper.defaultBatchSize,
-      false,
     );
 
     return {
-      balance0: results[0].returnData,
-      balance1: results[1].returnData,
-      traderate0: results[2].returnData,
-      traderate1: results[3].returnData,
+      balance0: results[0],
+      balance1: results[1],
+      traderate0: results[2],
+      traderate1: results[3],
     };
+  }
+
+  async getStateOrGenerate(blockNumber: number): Promise<OSwapPoolState> {
+    let state = this.getState(blockNumber);
+    if (!state) {
+      state = await this.generateState(blockNumber);
+      this.setState(state, blockNumber);
+    }
+    return state;
   }
 
   /**

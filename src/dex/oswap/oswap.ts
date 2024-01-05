@@ -21,16 +21,11 @@ import { OSwapConfig, Adapters, OSWAP_GAS_COST } from './config';
 import { OSwapEventPool } from './oswap-pool';
 import OSwapABI from '../../abi/oswap/oswap.abi.json';
 
+export class OSwap extends SimpleExchange implements IDex<OSwapData> {
+  readonly eventPools: { [id: string]: OSwapEventPool } = {};
 
-export class OSwap
-  extends SimpleExchange
-  implements IDex<OSwapData>
-{
-  protected eventPools: { [id: string]: OSwapEventPool } = {};
+  readonly hasConstantPriceLargeAmounts = false;
 
-  // OSwap pricing is constant, regardless of the swap amount.
-  readonly hasConstantPriceLargeAmounts = true;
-  
   // This may change in the future but currently OSwao works only with wrapped asset.
   readonly needWrapNative = true;
 
@@ -69,14 +64,6 @@ export class OSwap
     }
   }
 
-  // Initialize pricing is called once in the start of
-  // pricing service. It is intended to setup the integration
-  // for pricing requests. It is optional for a DEX to
-  // implement this function
-  async initializePricing(blockNumber: number) {
-    // FRANCK: should we fetch the traderate here????
-  }
-
   // Returns the list of contract adapters (name and index)
   // for a buy/sell. Return null if there are no adapters.
   getAdapters(side: SwapSide): { name: string; index: number }[] | null {
@@ -88,10 +75,19 @@ export class OSwap
     const srcAddress = srcToken.address.toLowerCase();
     const destAddress = destToken.address.toLowerCase();
     for (const pool of this.pools) {
-      if ((srcAddress === pool.token0 && destAddress === pool.token1) ||
-          (srcAddress === pool.token1 && destAddress === pool.token0)) {
+      if (
+        (srcAddress === pool.token0 && destAddress === pool.token1) ||
+        (srcAddress === pool.token1 && destAddress === pool.token0)
+      ) {
         return pool;
       }
+    }
+    return null;
+  }
+
+  getPoolById(id: string): OSwapPool | null {
+    for (const pool of this.pools) {
+      if (pool.id === id) return pool;
     }
     return null;
   }
@@ -99,7 +95,7 @@ export class OSwap
   // Returns a list of pool using the token.
   getPoolsByTokenAddress(tokenAddress: Address): OSwapPool[] {
     const address = tokenAddress.toLowerCase();
-    let pools: OSwapPool[] = []
+    let pools: OSwapPool[] = [];
     for (const pool of this.pools) {
       if (address === pool.token0 || address === pool.token1) {
         pools.push(pool);
@@ -119,33 +115,44 @@ export class OSwap
     blockNumber: number,
   ): Promise<string[]> {
     const pool = this.getPoolByTokenPair(srcToken, destToken);
-    return pool ? [pool.id] : []
+    return pool ? [pool.id] : [];
   }
 
-  // Given "amount" of "from" token, how much in "to" token will be received.
-  calcPrice(pool: OSwapPool, state: OSwapPoolState, from: Token, amount: bigint) : bigint {
-    const rate = from.address.toLowerCase() === pool.token0 ? 
-      state.traderate0 :
-      state.traderate1;
+  // Given "amount" of "from" token, how much of "to" token will be received.
+  calcPrice(
+    pool: OSwapPool,
+    state: OSwapPoolState,
+    from: Token,
+    amount: bigint,
+  ): bigint {
+    const rate =
+      from.address.toLowerCase() === pool.token0
+        ? state.traderate0
+        : state.traderate1;
     // Note: traderate is at precision 36.
-    return amount * rate / getBigIntPow(36);
+    return (amount * rate) / getBigIntPow(36);
   }
 
   // Returns true if the pool has enough liquidity for the swap. False otherwise.
-  checkLiquidity(pool: OSwapPool, state: OSwapPoolState, from: Token, amount: bigint) : boolean {
+  checkLiquidity(
+    pool: OSwapPool,
+    state: OSwapPoolState,
+    from: Token,
+    amount: bigint,
+  ): boolean {
     if (from.address.toLowerCase() === pool.token0) {
-      const needed = amount * state.traderate0 / getBigIntPow(36);
-      return (needed <= state.balance1)
+      const needed = (amount * state.traderate0) / getBigIntPow(36);
+      return needed <= state.balance1;
     } else {
-      const needed = amount * state.traderate1 / getBigIntPow(36);
-      return (needed <= state.balance0)
+      const needed = (amount * state.traderate1) / getBigIntPow(36);
+      return needed <= state.balance0;
     }
   }
 
   // Returns pool prices for amounts.
   // If limitPools is defined only pools in limitPools
   // should be used. If limitPools is undefined then
-  // any pools can be used.
+  // any pool can be used.
   async getPricesVolume(
     srcToken: Token,
     destToken: Token,
@@ -160,41 +167,47 @@ export class OSwap
 
     // Make sure the pool meets the optional limitPools filter.
     if (limitPools && !limitPools.includes(pool.id)) return null;
-    
-    const eventPool = this.eventPools[pool.id];
-    if (!eventPool) throw new Error(`OSwap pool ${pool.id}: No EventPool found.`)
 
-    const state = eventPool.getState(blockNumber);
-    if (!state) throw new Error(`OSwap pool ${pool.id}: EventPool with no state.`)
+    const eventPool = this.eventPools[pool.id];
+    if (!eventPool)
+      throw new Error(`OSwap pool ${pool.id}: No EventPool found.`);
+
+    const state = await eventPool.getStateOrGenerate(blockNumber);
 
     // Ensure there is enough liquidity in the pool to process all the requested swaps.
-    const totalAmount = amounts.reduce((a: bigint, b: bigint) => a + b, BigInt(0));
-    if (!this.checkLiquidity(pool, state, srcToken, totalAmount)) return null;
-
+    const totalAmount = amounts.reduce(
+      (a: bigint, b: bigint) => a + b,
+      BigInt(0),
+    );
+    if (!this.checkLiquidity(pool, state, srcToken, totalAmount)) {
+      return null;
+    }
     // Calculate the prices
-    const unitAmount = getBigIntPow((side === SwapSide.SELL ? srcToken : destToken).decimals);
+    const unitAmount = getBigIntPow(18);
     const unitPrice = this.calcPrice(pool, state, srcToken, unitAmount);
-    const prices = amounts.map(amount => this.calcPrice(pool, state, srcToken, amount));
+    const prices = amounts.map(amount =>
+      this.calcPrice(pool, state as OSwapPoolState, srcToken, amount),
+    );
 
-    return [{
-      prices,
-      unit: unitPrice,
-      data: {
-        pool: pool.address,
-        receiver: this.augustusAddress,
-        path: [srcToken.address, destToken.address]
+    return [
+      {
+        prices,
+        unit: unitPrice,
+        data: {
+          pool: pool.address,
+          receiver: this.augustusAddress,
+          path: [srcToken.address, destToken.address],
+        },
+        exchange: this.dexKey,
+        poolIdentifier: pool.id,
+        gasCost: OSWAP_GAS_COST,
+        poolAddresses: [pool.address],
       },
-      exchange: this.dexKey,
-      poolIdentifier: pool.id,
-      gasCost: OSWAP_GAS_COST,
-      poolAddresses: [pool.address],
-    }];
+    ];
   }
 
   // Returns estimated gas cost of calldata for this DEX in multiSwap
-  getCalldataGasCost(
-    poolPrices: PoolPrices<OSwapData>,
-  ): number | number[] {
+  getCalldataGasCost(poolPrices: PoolPrices<OSwapData>): number | number[] {
     // TODO: update if there is any payload in getAdapterParam
     return CALLDATA_GAS_COST.DEX_NO_PAYLOAD;
   }
@@ -280,14 +293,15 @@ export class OSwap
   ): Promise<PoolLiquidity[]> {
     // Get the list of pools using the token.
     const pools = this.getPoolsByTokenAddress(tokenAddress);
-    if (!pools.length) return []
+    if (!pools.length) return [];
 
     const results = await Promise.all<PoolLiquidity>(
       pools.map(async pool => {
         // Get the pool's balance and its USD value.
         const eventPool = this.eventPools[pool.id];
-        const state = eventPool.getState(eventPool.getStateBlockNumber())
-        if (!state) throw new Error('OSwap: missing state for pool ${pool.id}');
+        const blockNumber =
+          await this.dexHelper.web3Provider.eth.getBlockNumber();
+        const state = await eventPool.getStateOrGenerate(blockNumber);
 
         const usd0 = await this.dexHelper.getTokenUSDPrice(
           { address: pool.token0, decimals: 18 },
@@ -296,25 +310,25 @@ export class OSwap
         const usd1 = await this.dexHelper.getTokenUSDPrice(
           { address: pool.token1, decimals: 18 },
           state.balance1,
-        )
+        );
 
         // Get the other token in the pair.
-        const pairedToken = (pool.token0 === tokenAddress.toLowerCase()) ?
-        { address: pool.token1, decimals: 18 } :
-        { address: pool.token0, decimals: 18 }
+        const pairedToken =
+          pool.token0 === tokenAddress.toLowerCase()
+            ? { address: pool.token1, decimals: 18 }
+            : { address: pool.token0, decimals: 18 };
 
         return {
-            exchange: this.dexKey,
-            address: pool.address,
-            connectorTokens: [ pairedToken ],
-            liquidityUSD: usd0 + usd1,
-          }
-        }
-      )
-    )
+          exchange: this.dexKey,
+          address: pool.address,
+          connectorTokens: [pairedToken],
+          liquidityUSD: usd0 + usd1,
+        };
+      }),
+    );
     return results
       .filter(r => r)
-      .sort((a , b) => a.liquidityUSD - b.liquidityUSD)
+      .sort((a, b) => a.liquidityUSD - b.liquidityUSD)
       .slice(0, limit);
   }
 
