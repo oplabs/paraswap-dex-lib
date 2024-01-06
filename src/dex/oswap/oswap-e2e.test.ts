@@ -39,7 +39,7 @@ import { generateConfig } from '../../config';
   etc).
 
   You can run this individual test script by running:
-  `npx jest src/dex/<dex-name>/<dex-name>-e2e.test.ts`
+  `npx jest src/dex/oswap/oswap-e2e.test.ts`
 
   e2e tests use the Tenderly fork api. Please add the following to your
   .env file:
@@ -68,7 +68,11 @@ function testForNetwork(
   const holders = Holders[network];
   const nativeTokenSymbol = NativeTokenSymbols[network];
 
-  // TODO: Add any direct swap contractMethod name if it exists
+  const sideToContractMethods = new Map([
+    [SwapSide.SELL, [ContractMethod.simpleSwap]],
+    //[ SwapSide.BUY, [ContractMethod.buy]],
+  ]);
+  /*
   const sideToContractMethods = new Map([
     [
       SwapSide.SELL,
@@ -78,21 +82,21 @@ function testForNetwork(
         ContractMethod.megaSwap,
       ],
     ],
-    // TODO: If buy is not supported remove the buy contract methods
     [SwapSide.BUY, [ContractMethod.simpleBuy, ContractMethod.buy]],
   ]);
+  */
 
   describe(`${network}`, () => {
     sideToContractMethods.forEach((contractMethods, side) =>
       describe(`${side}`, () => {
         contractMethods.forEach((contractMethod: ContractMethod) => {
           describe(`${contractMethod}`, () => {
-            it(`${nativeTokenSymbol} -> ${tokenASymbol}`, async () => {
+            it.only(`${nativeTokenSymbol} -> ${tokenBSymbol}`, async () => {
               await testE2E(
                 tokens[nativeTokenSymbol],
-                tokens[tokenASymbol],
+                tokens[tokenBSymbol],
                 holders[nativeTokenSymbol],
-                side === SwapSide.SELL ? nativeTokenAmount : tokenAAmount,
+                side === SwapSide.SELL ? nativeTokenAmount : tokenBAmount,
                 side,
                 dexKey,
                 contractMethod,
@@ -100,12 +104,13 @@ function testForNetwork(
                 provider,
               );
             });
-            it(`${tokenASymbol} -> ${nativeTokenSymbol}`, async () => {
+
+            it(`${tokenBSymbol} -> ${nativeTokenSymbol}`, async () => {
               await testE2E(
-                tokens[tokenASymbol],
+                tokens[tokenBSymbol],
                 tokens[nativeTokenSymbol],
-                holders[tokenASymbol],
-                side === SwapSide.SELL ? tokenAAmount : nativeTokenAmount,
+                holders[tokenBSymbol],
+                side === SwapSide.SELL ? tokenBAmount : nativeTokenAmount,
                 side,
                 dexKey,
                 contractMethod,
@@ -113,6 +118,7 @@ function testForNetwork(
                 provider,
               );
             });
+
             it(`${tokenASymbol} -> ${tokenBSymbol}`, async () => {
               await testE2E(
                 tokens[tokenASymbol],
@@ -134,18 +140,17 @@ function testForNetwork(
 }
 
 describe('Oswap E2E', () => {
-  const dexKey = 'Oswap';
+  const dexKey = 'OSwap';
 
   describe('Mainnet', () => {
     const network = Network.MAINNET;
 
-    // TODO: Modify the tokenASymbol, tokenBSymbol, tokenAAmount;
-    const tokenASymbol: string = 'tokenASymbol';
-    const tokenBSymbol: string = 'tokenBSymbol';
+    const tokenASymbol: string = 'WETH';
+    const tokenBSymbol: string = 'STETH';
 
-    const tokenAAmount: string = 'tokenAAmount';
-    const tokenBAmount: string = 'tokenBAmount';
-    const nativeTokenAmount = '1000000000000000000';
+    const tokenAAmount: string = '10000000000000000';
+    const tokenBAmount: string = '10000000000000000';
+    const nativeTokenAmount: string = '10000000000000000'; // 0.01 ETH
 
     testForNetwork(
       network,
@@ -156,7 +161,5 @@ describe('Oswap E2E', () => {
       tokenBAmount,
       nativeTokenAmount,
     );
-
-    // TODO: Add any additional test cases required to test Oswap
   });
 });

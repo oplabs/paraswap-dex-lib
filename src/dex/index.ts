@@ -83,6 +83,7 @@ import { QuickPerps } from './quick-perps/quick-perps';
 import { NomiswapV2 } from './uniswap-v2/nomiswap-v2';
 import { Dexalot } from './dexalot/dexalot';
 import { Smardex } from './smardex/smardex';
+import { OSwap } from './oswap/oswap';
 
 const LegacyDexes = [
   CurveV2,
@@ -162,6 +163,7 @@ const Dexes = [
   NomiswapV2,
   SolidlyV3,
   Smardex,
+  OSwap,
   //Wombat,
 ];
 

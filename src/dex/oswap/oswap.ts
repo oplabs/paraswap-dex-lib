@@ -16,7 +16,10 @@ import { getDexKeysWithNetwork, getBigIntPow } from '../../utils';
 import { IDex } from '../../dex/idex';
 import { IDexHelper } from '../../dex-helper/idex-helper';
 import { OSwapData, OSwapPool, OSwapPoolState } from './types';
-import { SimpleExchange } from '../simple-exchange';
+import {
+  SimpleExchange,
+  getLocalDeadlineAsFriendlyPlaceholder,
+} from '../simple-exchange';
 import { OSwapConfig, Adapters, OSWAP_GAS_COST } from './config';
 import { OSwapEventPool } from './oswap-pool';
 import OSwapABI from '../../abi/oswap/oswap.abi.json';
@@ -44,7 +47,7 @@ export class OSwap extends SimpleExchange implements IDex<OSwapData> {
     readonly network: Network,
     readonly dexKey: string,
     readonly dexHelper: IDexHelper,
-    protected adapters = Adapters[network] || {}, // TODO: add any additional optional params to support other fork DEXes
+    protected adapters = Adapters[network] || {},
   ) {
     super(dexHelper, dexKey);
     this.logger = dexHelper.getLogger(dexKey);
@@ -254,14 +257,13 @@ export class OSwap extends SimpleExchange implements IDex<OSwapData> {
     let method: string;
     let args: any;
 
-    // Note: we set the deadline argument to zero since its value is ignored by the SmartDex adapter
-    // which always uses block.timestamp as deadline when calling the swap method.
+    const deadline = getLocalDeadlineAsFriendlyPlaceholder();
     if (side === SwapSide.SELL) {
       method = 'swapExactTokensForTokens';
-      args = [srcAmount, destAmount, data.path, data.receiver, 0];
+      args = [srcAmount, destAmount, data.path, data.receiver, deadline];
     } else {
       method = 'swapTokensForExactTokens';
-      args = [destAmount, srcAmount, data.path, data.receiver, 0];
+      args = [destAmount, srcAmount, data.path, data.receiver, deadline];
     }
 
     const swapData = this.iOSwap.encodeFunctionData(method, args);
