@@ -29,7 +29,7 @@ export class OSwap extends SimpleExchange implements IDex<OSwapData> {
 
   readonly hasConstantPriceLargeAmounts = false;
 
-  // This may change in the future but currently OSwao works only with wrapped asset.
+  // This may change in the future, but currently OSwao does not support native ETH.
   readonly needWrapNative = true;
 
   readonly isFeeOnTransferSupported = false;
@@ -77,6 +77,10 @@ export class OSwap extends SimpleExchange implements IDex<OSwapData> {
   getPoolByTokenPair(srcToken: Token, destToken: Token): OSwapPool | null {
     const srcAddress = srcToken.address.toLowerCase();
     const destAddress = destToken.address.toLowerCase();
+
+    // A pair can only be made of 2 different tokens.
+    if (srcAddress === destAddress) return null;
+
     for (const pool of this.pools) {
       if (
         (srcAddress === pool.token0 && destAddress === pool.token1) ||
@@ -121,19 +125,28 @@ export class OSwap extends SimpleExchange implements IDex<OSwapData> {
     return pool ? [pool.id] : [];
   }
 
-  // Given "amount" of "from" token, how much of "to" token will be received.
+  // Sell: Given "amount" of "from" token, how much of "to" token will be received by the trader.
+  // Buy: Given "amount" of "dest" token, how much of "to" token is required from the trader.
   calcPrice(
     pool: OSwapPool,
     state: OSwapPoolState,
     from: Token,
     amount: bigint,
+    side: SwapSide,
   ): bigint {
+    if (side === SwapSide.SELL) {
+      const rate =
+        from.address.toLowerCase() === pool.token0
+          ? state.traderate0
+          : state.traderate1;
+      return (amount * rate) / getBigIntPow(36); // Note: traderate is at precision 36.
+    }
+    // SwapSide.BUY
     const rate =
       from.address.toLowerCase() === pool.token0
         ? state.traderate0
         : state.traderate1;
-    // Note: traderate is at precision 36.
-    return (amount * rate) / getBigIntPow(36);
+    return (amount * getBigIntPow(36)) / rate;
   }
 
   // Returns true if the pool has enough liquidity for the swap. False otherwise.
@@ -142,14 +155,18 @@ export class OSwap extends SimpleExchange implements IDex<OSwapData> {
     state: OSwapPoolState,
     from: Token,
     amount: bigint,
+    side: SwapSide,
   ): boolean {
-    if (from.address.toLowerCase() === pool.token0) {
-      const needed = (amount * state.traderate0) / getBigIntPow(36);
-      return needed <= state.balance1;
-    } else {
-      const needed = (amount * state.traderate1) / getBigIntPow(36);
-      return needed <= state.balance0;
+    if (side === SwapSide.SELL) {
+      const needed = this.calcPrice(pool, state, from, amount, side);
+      return from.address.toLowerCase() === pool.token0
+        ? needed <= state.balance1
+        : needed <= state.balance0;
     }
+    // SwapSide.BUY
+    return from.address.toLowerCase() === pool.token0
+      ? amount <= state.balance1
+      : amount <= state.balance0;
   }
 
   // Returns pool prices for amounts.
@@ -182,14 +199,14 @@ export class OSwap extends SimpleExchange implements IDex<OSwapData> {
       (a: bigint, b: bigint) => a + b,
       BigInt(0),
     );
-    if (!this.checkLiquidity(pool, state, srcToken, totalAmount)) {
+    if (!this.checkLiquidity(pool, state, srcToken, totalAmount, side)) {
       return null;
     }
     // Calculate the prices
     const unitAmount = getBigIntPow(18);
-    const unitPrice = this.calcPrice(pool, state, srcToken, unitAmount);
+    const unitPrice = this.calcPrice(pool, state, srcToken, unitAmount, side);
     const prices = amounts.map(amount =>
-      this.calcPrice(pool, state as OSwapPoolState, srcToken, amount),
+      this.calcPrice(pool, state, srcToken, amount, side),
     );
 
     return [
@@ -211,8 +228,23 @@ export class OSwap extends SimpleExchange implements IDex<OSwapData> {
 
   // Returns estimated gas cost of calldata for this DEX in multiSwap
   getCalldataGasCost(poolPrices: PoolPrices<OSwapData>): number | number[] {
-    // TODO: update if there is any payload in getAdapterParam
-    return CALLDATA_GAS_COST.DEX_NO_PAYLOAD;
+    return (
+      CALLDATA_GAS_COST.DEX_OVERHEAD +
+      // ParentStruct header
+      CALLDATA_GAS_COST.OFFSET_SMALL +
+      // ParentStruct -> path[] header
+      CALLDATA_GAS_COST.OFFSET_SMALL +
+      // ParentStruct -> path length
+      CALLDATA_GAS_COST.LENGTH_SMALL +
+      // ParentStruct -> path[0]
+      CALLDATA_GAS_COST.ADDRESS +
+      // ParentStruct -> path[1]
+      CALLDATA_GAS_COST.ADDRESS +
+      // ParentStruct -> receiver header
+      CALLDATA_GAS_COST.OFFSET_SMALL +
+      // ParentStruct -> receiver
+      CALLDATA_GAS_COST.ADDRESS
+    );
   }
 
   // Encode params required by the exchange adapter

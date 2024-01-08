@@ -198,8 +198,20 @@ describe('OSwap', function () {
       );
 
       if (
-        !oswap.checkLiquidity(pool, state, srcToken, sellTotalAmount) ||
-        !oswap.checkLiquidity(pool, state, destToken, buyTotalAmount)
+        !oswap.checkLiquidity(
+          pool,
+          state,
+          srcToken,
+          sellTotalAmount,
+          SwapSide.SELL,
+        ) ||
+        !oswap.checkLiquidity(
+          pool,
+          state,
+          destToken,
+          buyTotalAmount,
+          SwapSide.BUY,
+        )
       ) {
         return DEFAULT_BLOCK_NUMBER;
       }
