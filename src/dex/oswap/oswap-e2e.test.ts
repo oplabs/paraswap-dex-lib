@@ -3,11 +3,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import { testE2E } from '../../../tests/utils-e2e';
-import {
-  Tokens,
-  Holders,
-  NativeTokenSymbols,
-} from '../../../tests/constants-e2e';
+import { Tokens, Holders } from '../../../tests/constants-e2e';
 import { Network, ContractMethod, SwapSide } from '../../constants';
 import { StaticJsonRpcProvider } from '@ethersproject/providers';
 import { generateConfig } from '../../config';
@@ -58,7 +54,6 @@ function testForNetwork(
   tokenBSymbol: string,
   tokenAAmount: string,
   tokenBAmount: string,
-  nativeTokenAmount: string,
 ) {
   const provider = new StaticJsonRpcProvider(
     generateConfig(network).privateHttpProvider,
@@ -66,13 +61,7 @@ function testForNetwork(
   );
   const tokens = Tokens[network];
   const holders = Holders[network];
-  const nativeTokenSymbol = NativeTokenSymbols[network];
 
-  const sideToContractMethods = new Map([
-    [SwapSide.SELL, [ContractMethod.simpleSwap]],
-    //[ SwapSide.BUY, [ContractMethod.buy]],
-  ]);
-  /*
   const sideToContractMethods = new Map([
     [
       SwapSide.SELL,
@@ -84,47 +73,32 @@ function testForNetwork(
     ],
     [SwapSide.BUY, [ContractMethod.simpleBuy, ContractMethod.buy]],
   ]);
-  */
 
   describe(`${network}`, () => {
     sideToContractMethods.forEach((contractMethods, side) =>
       describe(`${side}`, () => {
         contractMethods.forEach((contractMethod: ContractMethod) => {
           describe(`${contractMethod}`, () => {
-            it.only(`${nativeTokenSymbol} -> ${tokenBSymbol}`, async () => {
-              await testE2E(
-                tokens[nativeTokenSymbol],
-                tokens[tokenBSymbol],
-                holders[nativeTokenSymbol],
-                side === SwapSide.SELL ? nativeTokenAmount : tokenBAmount,
-                side,
-                dexKey,
-                contractMethod,
-                network,
-                provider,
-              );
-            });
-
-            it(`${tokenBSymbol} -> ${nativeTokenSymbol}`, async () => {
-              await testE2E(
-                tokens[tokenBSymbol],
-                tokens[nativeTokenSymbol],
-                holders[tokenBSymbol],
-                side === SwapSide.SELL ? tokenBAmount : nativeTokenAmount,
-                side,
-                dexKey,
-                contractMethod,
-                network,
-                provider,
-              );
-            });
-
             it(`${tokenASymbol} -> ${tokenBSymbol}`, async () => {
               await testE2E(
                 tokens[tokenASymbol],
                 tokens[tokenBSymbol],
                 holders[tokenASymbol],
                 side === SwapSide.SELL ? tokenAAmount : tokenBAmount,
+                side,
+                dexKey,
+                contractMethod,
+                network,
+                provider,
+              );
+            });
+
+            it(`${tokenBSymbol} -> ${tokenASymbol}`, async () => {
+              await testE2E(
+                tokens[tokenBSymbol],
+                tokens[tokenASymbol],
+                holders[tokenBSymbol],
+                side === SwapSide.SELL ? tokenBAmount : tokenAAmount,
                 side,
                 dexKey,
                 contractMethod,
@@ -148,9 +122,8 @@ describe('Oswap E2E', () => {
     const tokenASymbol: string = 'WETH';
     const tokenBSymbol: string = 'STETH';
 
-    const tokenAAmount: string = '10000000000000000';
-    const tokenBAmount: string = '10000000000000000';
-    const nativeTokenAmount: string = '10000000000000000'; // 0.01 ETH
+    const tokenAAmount: string = '10000000000000';
+    const tokenBAmount: string = '10000000000000';
 
     testForNetwork(
       network,
@@ -159,7 +132,6 @@ describe('Oswap E2E', () => {
       tokenBSymbol,
       tokenAAmount,
       tokenBAmount,
-      nativeTokenAmount,
     );
   });
 });
