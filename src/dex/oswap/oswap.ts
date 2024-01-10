@@ -29,7 +29,7 @@ export class OSwap extends SimpleExchange implements IDex<OSwapData> {
 
   readonly hasConstantPriceLargeAmounts = false;
 
-  // This may change in the future, but currently OSwao does not support native ETH.
+  // This may change in the future, but currently OSwap does not support native ETH.
   readonly needWrapNative = true;
 
   readonly isFeeOnTransferSupported = false;
@@ -127,6 +127,7 @@ export class OSwap extends SimpleExchange implements IDex<OSwapData> {
 
   // Sell: Given "amount" of "from" token, how much of "to" token will be received by the trader.
   // Buy: Given "amount" of "dest" token, how much of "to" token is required from the trader.
+  // Note: OSwap traderate is at precision 36.
   calcPrice(
     pool: OSwapPool,
     state: OSwapPoolState,
@@ -139,14 +140,15 @@ export class OSwap extends SimpleExchange implements IDex<OSwapData> {
         from.address.toLowerCase() === pool.token0
           ? state.traderate0
           : state.traderate1;
-      return (amount * rate) / getBigIntPow(36); // Note: traderate is at precision 36.
+      return (amount * rate) / getBigIntPow(36);
+    } else {
+      // SwapSide.BUY
+      const rate =
+        from.address.toLowerCase() === pool.token0
+          ? state.traderate0
+          : state.traderate1;
+      return (amount * getBigIntPow(36)) / rate;
     }
-    // SwapSide.BUY
-    const rate =
-      from.address.toLowerCase() === pool.token0
-        ? state.traderate0
-        : state.traderate1;
-    return (amount * getBigIntPow(36)) / rate;
   }
 
   // Returns true if the pool has enough liquidity for the swap. False otherwise.

@@ -123,11 +123,14 @@ export class OSwapEventPool extends StatefulEventSubscriber<OSwapPoolState> {
     };
   }
 
-  async getStateOrGenerate(blockNumber: number): Promise<OSwapPoolState> {
+  async getStateOrGenerate(
+    blockNumber: number,
+    readonly: boolean = true,
+  ): Promise<OSwapPoolState> {
     let state = this.getState(blockNumber);
     if (!state) {
       state = await this.generateState(blockNumber);
-      this.setState(state, blockNumber);
+      if (!readonly) this.setState(state, blockNumber);
     }
     return state;
   }

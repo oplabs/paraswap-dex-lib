@@ -14,7 +14,8 @@ import {
   checkConstantPoolPrices,
 } from '../../../tests/utils';
 import { Tokens } from '../../../tests/constants-e2e';
-import { OSwap } from './OSwap';
+import { Address } from '../../types';
+import { OSwap } from './oswap';
 import { OSwapPool } from './types';
 
 async function getOnchainTraderates(
@@ -51,19 +52,25 @@ async function checkOnChainPricing(
   blockNumber: number,
   prices: bigint[],
   side: SwapSide,
+  srcAddress: Address,
+  destAddress: Address,
   amounts: bigint[],
 ) {
   // Get the onchain trade rates from the pool and calculate the prices.
   const data = await getOnchainTraderates(oswap, pool, blockNumber);
   let expectedPrices: bigint[] = [];
   for (const amount of amounts) {
-    if ((side = SwapSide.SELL)) {
-      expectedPrices.push((amount * data.traderate0) / getBigIntPow(36));
+    const rate =
+      srcAddress.toLowerCase() === pool.token0
+        ? data.traderate0
+        : data.traderate1;
+    if (side === SwapSide.SELL) {
+      expectedPrices.push((amount * rate) / getBigIntPow(36));
     } else {
-      expectedPrices.push((amount * data.traderate1) / getBigIntPow(36));
+      // SwapSide.BUY
+      expectedPrices.push((amount * getBigIntPow(36)) / rate);
     }
   }
-
   expect(prices).toEqual(expectedPrices);
 }
 
@@ -78,10 +85,12 @@ async function testPricingOnNetwork(
   amounts: bigint[],
 ) {
   const networkTokens = Tokens[network];
+  const srcToken = networkTokens[srcTokenSymbol];
+  const destToken = networkTokens[destTokenSymbol];
 
   const poolIds = await oswap.getPoolIdentifiers(
-    networkTokens[srcTokenSymbol],
-    networkTokens[destTokenSymbol],
+    srcToken,
+    destToken,
     side,
     blockNumber,
   );
@@ -93,15 +102,15 @@ async function testPricingOnNetwork(
 
   // Get calculated prices based on the stored state.
   const poolPrices = await oswap.getPricesVolume(
-    networkTokens[srcTokenSymbol],
-    networkTokens[destTokenSymbol],
+    srcToken,
+    destToken,
     amounts,
     side,
     blockNumber,
     poolIds,
   );
   console.log(
-    `${srcTokenSymbol} <> ${destTokenSymbol} Pool Prices: `,
+    `${side} ${srcTokenSymbol} <> ${destTokenSymbol} Pool Prices: `,
     poolPrices,
   );
 
@@ -121,6 +130,8 @@ async function testPricingOnNetwork(
     blockNumber,
     poolPrices![0].prices,
     side,
+    srcToken.address,
+    destToken.address,
     amounts,
   );
 }
@@ -168,8 +179,9 @@ describe('OSwap', function () {
     ];
 
     // Return a blockNumber to use for the tests.
-    // Check the pool has enough liquidity to run the tests at the current blockNumber.
-    // If not, fallback to a known blockNumber in the past with high enough liquidity.
+    // Check that the pool has enough liquidity to run the tests at the current blockNumber.
+    // If not, fallback to a known blockNumber in the past with
+    // high enough liquidity - the on-chain queries will just be a bit slower to execute.
     async function getBlockNumberForTesting(oswap: OSwap): Promise<number> {
       const DEFAULT_BLOCK_NUMBER = 18888241;
 
@@ -185,7 +197,7 @@ describe('OSwap', function () {
         );
 
       const eventPool = oswap.eventPools[pool.id];
-      const state = await eventPool.getStateOrGenerate(blockNumber);
+      const state = await eventPool.getStateOrGenerate(blockNumber, true);
 
       // Sum up all the amounts from the test scenarios.
       const sellTotalAmount = amountsForSell.reduce(
