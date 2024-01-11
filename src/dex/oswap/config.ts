@@ -24,7 +24,7 @@ export const OSwapConfig: DexConfigMap<DexParams> = {
 
 export const Adapters: Record<number, AdapterMappings> = {
   [Network.MAINNET]: {
-    // Note: Re-use the SmarDex adapters since it implements
+    // Note: We re-use the SmarDex adapters since it implements
     // an Uniswap V2 router compatible interface, which OSWap supports.
     [SwapSide.SELL]: [{ name: 'Adapter04', index: 6 }],
     [SwapSide.BUY]: [{ name: 'BuyAdapter02', index: 2 }],

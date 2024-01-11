@@ -45,7 +45,7 @@ async function getOnchainTraderates(
   return { traderate0: results[0], traderate1: results[1] };
 }
 
-// Check prices passed as arguments against prices calculated from data fetched on-chain.
+// Check prices passed as arguments against prices calculated from on-chain data.
 async function checkOnChainPricing(
   oswap: OSwap,
   pool: OSwapPool,

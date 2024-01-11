@@ -135,20 +135,13 @@ export class OSwap extends SimpleExchange implements IDex<OSwapData> {
     amount: bigint,
     side: SwapSide,
   ): bigint {
-    if (side === SwapSide.SELL) {
-      const rate =
-        from.address.toLowerCase() === pool.token0
-          ? state.traderate0
-          : state.traderate1;
-      return (amount * rate) / getBigIntPow(36);
-    } else {
-      // SwapSide.BUY
-      const rate =
-        from.address.toLowerCase() === pool.token0
-          ? state.traderate0
-          : state.traderate1;
-      return (amount * getBigIntPow(36)) / rate;
-    }
+    const rate =
+      from.address.toLowerCase() === pool.token0
+        ? state.traderate0
+        : state.traderate1;
+    return side === SwapSide.SELL
+      ? (amount * rate) / getBigIntPow(36)
+      : (amount * getBigIntPow(36)) / rate;
   }
 
   // Returns true if the pool has enough liquidity for the swap. False otherwise.

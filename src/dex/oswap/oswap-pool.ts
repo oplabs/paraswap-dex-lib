@@ -136,7 +136,7 @@ export class OSwapEventPool extends StatefulEventSubscriber<OSwapPoolState> {
   }
 
   /**
-   * Handles a trade rate change on the pool.
+   * Handle a trade rate change on the pool.
    */
   handleTraderateChanged(
     event: any,
@@ -152,7 +152,7 @@ export class OSwapEventPool extends StatefulEventSubscriber<OSwapPoolState> {
 
   /**
    * Process the transfer events for tokens in/out of the pool
-   * to keep the state's token balances sup to date.
+   * to keep the state's token balances up to date.
    */
   handleTransfer(
     event: any,
